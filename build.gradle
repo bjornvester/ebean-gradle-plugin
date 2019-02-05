@@ -1,28 +1,20 @@
-group 'io.ebean'
-version '11.27.1'
-
-buildscript {
-  repositories {
-    maven {
-      url "https://plugins.gradle.org/m2/"
-    }
-  }
-  dependencies {
-    classpath "com.gradle.publish:plugin-publish-plugin:0.9.9"
-  }
+plugins {
+  id 'groovy'
+  id 'maven'
+  id 'maven-publish'
+  id 'com.gradle.plugin-publish' version '0.10.0'
+  id 'java-gradle-plugin'
 }
 
-apply plugin: 'groovy'
-apply plugin: 'maven'
-apply plugin: "com.gradle.plugin-publish"
+group 'io.ebean'
+version '11.27.1-bjornvester-1.0.3'
 
 if (project.hasProperty("signing.keyId")) {
-    apply plugin: 'signing'
-    signing {
-        sign configurations.archives
-    }
+  apply plugin: 'signing'
+  signing {
+    sign configurations.archives
+  }
 }
-
 
 repositories {
   mavenLocal()
@@ -31,30 +23,44 @@ repositories {
 }
 
 dependencies {
-    compile group: 'io.ebean', name: 'ebean-agent', version: '11.27.1'
+  implementation  group: 'io.ebean', name: 'ebean-agent', version: '11.27.1'
 
-    compile gradleApi()
-    compile localGroovy()
+  implementation gradleApi()
+  implementation localGroovy()
+
+  testImplementation gradleTestKit()
+  testImplementation('org.spockframework:spock-core:1.2-groovy-2.5') {
+    exclude group: 'org.codehaus.groovy'
+  }
 }
 
-task javadocJar(type: Jar, dependsOn: javadoc) {
-    classifier = 'javadoc'
-    from 'build/docs/javadoc'
+gradlePlugin {
+  plugins {
+    ebeanPlugin {
+      id = 'io.ebean'
+      implementationClass = 'io.ebean.gradle.EnhancePlugin'
+    }
+  }
+}
+
+task groovydocJar(type: Jar) {
+  from groovydoc
+  archiveClassifier = 'javadoc'
 }
 
 task sourcesJar(type: Jar) {
-    from sourceSets.main.allSource
-    classifier = 'sources'
+  from sourceSets.main.allSource
+  archiveClassifier = 'sources'
 }
 
 artifacts {
-    archives jar
-    archives javadocJar
-    archives sourcesJar
+  archives jar
+  archives groovydocJar
+  archives sourcesJar
 }
 
 jar {
-    manifest.attributes provider: 'gradle'
+  manifest.attributes provider: 'gradle'
 }
 
 pluginBundle {
@@ -108,8 +114,17 @@ uploadArchives {
             id 'vnnv'
             name 'Victor Nikiforov'
           }
+          developer {
+            id 'bjornvester'
+            name 'Bjørn Vester'
+          }
         }
       }
     }
   }
+}
+
+tasks.named("wrapper").configure {
+  distributionType = Wrapper.DistributionType.ALL
+  gradleVersion = "5.2"
 }

@@ -1,0 +1,26 @@
+plugins {
+  id "org.jetbrains.kotlin.jvm" version "1.3.11"
+  id "org.jetbrains.kotlin.kapt" version "1.3.11"
+  id 'io.ebean'
+}
+
+repositories {
+  jcenter()
+}
+
+// See https://kotlinlang.org/docs/reference/using-gradle.html
+
+dependencies {
+  //implementation group: 'org.jetbrains.kotlin', name: 'kotlin-stdlib-jdk8', version: '1.3.10'
+  implementation 'org.jetbrains.kotlin:kotlin-stdlib'
+  implementation group: 'io.ebean', name: 'ebean', version: '11.30.1'
+
+  // TODO: TEMP
+  kapt "io.ebean:kotlin-querybean-generator:11.27.1"
+  implementation "io.ebean:ebean-querybean:11.27.1"
+}
+
+ebean {
+  debugLevel = 9 // 1 - 9
+  queryBeans = true
+}

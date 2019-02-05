@@ -1,17 +1,18 @@
 package io.ebean.gradle
 
+import groovy.io.FileType
+import groovy.transform.CompileStatic
 import io.ebean.enhance.Transformer
-import io.ebean.enhance.common.InputStreamTransform
-import io.ebean.gradle.util.ClassUtils
+import org.codehaus.groovy.runtime.DefaultGroovyMethodsSupport
 import org.gradle.api.logging.Logger
 import org.gradle.api.logging.Logging
 
-import java.lang.instrument.IllegalClassFormatException
 import java.nio.file.Path
 
-class EbeanEnhancer {
+@CompileStatic
+class EbeanEnhancer implements Closeable {
 
-  private final Logger logger = Logging.getLogger(EnhancePlugin.class)
+  private final Logger logger = Logging.getLogger(EbeanEnhancer.class)
 
   /**
    * Directory containing .class files.
@@ -20,83 +21,74 @@ class EbeanEnhancer {
 
   private final Transformer combinedTransform
 
-  private final ClassLoader classLoader
+  private final URLClassLoader classLoader
 
-  EbeanEnhancer(Path outputDir, URL[] extraClassPath, ClassLoader contextLoader, EnhancePluginExtension params) {
-    logger.info('Calling enhancer' + outputDir + ':' + extraClassPath)
+  EbeanEnhancer(Path outputDir, URL[] extraClassPath, ClassLoader contextLoader, EnhancePluginExtension pluginExtension) {
+    logger.info("Creating Ebean enhancer for directory '$outputDir' and classpath $extraClassPath")
     this.outputDir = outputDir
     this.classLoader = new URLClassLoader(extraClassPath, contextLoader)
 
-    def args = "debug=" + params.debugLevel
+    String args = "debug=" + pluginExtension.debugLevel
     this.combinedTransform = new Transformer(classLoader, args)
   }
 
   void enhance() {
-    collectClassFiles(outputDir.toFile()).each { classFile ->
-      enhanceClassFile(classFile)
+    outputDir.eachFileRecurse(FileType.FILES) { path ->
+      if (path.fileName.toString().endsWith(".class")) {
+        String className = makeClassName(outputDir, path)
+        if (!isIgnorableClass(className)) {
+          enhanceClassFile(path, className)
+        }
+      }
     }
   }
 
-  private void enhanceClassFile(File classFile) {
-    def className = ClassUtils.makeClassName(outputDir, classFile)
-    if (isIgnorableClass(className)) {
-      return
-    }
+  @Override
+  void close() {
+    DefaultGroovyMethodsSupport.closeWithWarning(classLoader)
+  }
+
+  private void enhanceClassFile(Path classFile, String className) {
+    byte[] classBytes
 
     try {
-      classFile.withInputStream { classInputStream ->
+      classBytes = classFile.bytes
+    } catch (any) {
+      throw new EnhanceException("Unable to read class file ${classFile.fileName.toString()} for enhancement", any)
+    }
 
-        byte[] classBytes = InputStreamTransform.readBytes(classInputStream)
+    String jvmClassName = className.replace('.', '/')
+    byte[] classBytesEnhanced
 
-        // Make sure to close the stream otherwise classFile.delete() returns false on Windows
-        classInputStream.close()
+    try {
+      classBytesEnhanced = combinedTransform.transform(classLoader, jvmClassName, null, null, classBytes)
+    } catch (any) {
+      throw new EnhanceException("Unable to parse class file $jvmClassName for enhancement", any)
+    }
 
-        String jvmClassName = className.replace('.','/')
-        byte[] response = combinedTransform.transform(classLoader, jvmClassName, null, null, classBytes)
-
-        if (response != null) {
-          try {
-            if (!classFile.delete()) {
-              logger.error("Failed to delete enhanced file at $classFile.absolutePath")
-            } else {
-              logger.debug("Enhanced $jvmClassName")
-              InputStreamTransform.writeBytes(response, classFile)
-            }
-
-          } catch (IOException e) {
-            throw new EnhanceException("Unable to store enhanced class data back to file $classFile.name", e)
-          }
-        }
+    if (classBytesEnhanced) {
+      try {
+        classFile.bytes = classBytesEnhanced
+      } catch (any) {
+        throw new EnhanceException("Unable to store enhanced class data back to file $jvmClassName", any)
       }
-    } catch (IOException e) {
-      throw new EnhanceException("Unable to read class file $classFile.name for enhancement", e)
-    } catch (IllegalClassFormatException e) {
-      throw new EnhanceException("Unable to parse class file $classFile.name while enhance", e)
+
+      logger.debug("Enhanced $jvmClassName")
     }
   }
 
   /**
-   * Ignore scala lambda anonymous function and groovy meta info classes & closures
+   * Ignore scala lambda anonymous function and groovy meta info classes & closures.
    */
   private static boolean isIgnorableClass(String className) {
     return className.contains('$$anonfun$') || className.contains('$_')
   }
 
-  private static List<File> collectClassFiles(File dir) {
-
-    List<File> classFiles = new ArrayList<>()
-
-    dir.listFiles().each { file ->
-      if (file.directory) {
-        classFiles.addAll(collectClassFiles(file))
-      } else {
-        if (file.name.endsWith(".class")) {
-          classFiles.add(file)
-        }
-      }
-    }
-
-    classFiles
+  /**
+   * Returns the fully qualified class name given the base path and file path.
+   */
+  private static String makeClassName(Path basePath, Path classFile) {
+    Path classRelPath = basePath.relativize(classFile)
+    classRelPath.toString().replaceAll('[.]class$', '').replace('\\', '.').replace('/', '.')
   }
 }
-
