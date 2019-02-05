@@ -1,6 +1,22 @@
-group 'io.ebean'
-version '11.27.1'
+plugins {
+  id 'groovy'
+  id 'maven'
+  id 'maven-publish'
+  id 'com.gradle.plugin-publish' version '0.10.0'
+  id 'java-gradle-plugin'
+  id "com.jfrog.bintray" version "1.8.4"
+}
 
+group 'io.ebean'
+version '11.27.1-bjornvester-1.0.3'
+
+
+tasks.named("wrapper").configure {
+  distributionType = Wrapper.DistributionType.ALL
+  gradleVersion = "5.2"
+}
+
+/*
 buildscript {
   repositories {
     maven {
@@ -11,10 +27,7 @@ buildscript {
     classpath "com.gradle.publish:plugin-publish-plugin:0.9.9"
   }
 }
-
-apply plugin: 'groovy'
-apply plugin: 'maven'
-apply plugin: "com.gradle.plugin-publish"
+*/
 
 if (project.hasProperty("signing.keyId")) {
     apply plugin: 'signing'
@@ -23,18 +36,88 @@ if (project.hasProperty("signing.keyId")) {
     }
 }
 
-
 repositories {
-  mavenLocal()
+  //mavenLocal()
   mavenCentral()
   jcenter()
 }
 
 dependencies {
-    compile group: 'io.ebean', name: 'ebean-agent', version: '11.27.1'
+    implementation group: 'io.ebean', name: 'ebean-agent', version: '11.27.1'
 
-    compile gradleApi()
-    compile localGroovy()
+    implementation gradleApi()
+    implementation localGroovy()
+    implementation "io.ebean:querybean-generator:11.27.1" // TEMP
+    //implementation 'io.ebean:kotlin-querybean-generator:11.30.1' // TEMP
+
+    testImplementation gradleTestKit()
+    testImplementation('org.spockframework:spock-core:1.2-groovy-2.5') {
+      exclude group: 'org.codehaus.groovy'
+    }
+}
+
+gradlePlugin {
+  plugins {
+    ebeanPlugin {
+      id = 'io.ebean'
+      implementationClass = 'io.ebean.gradle.EnhancePlugin'
+    }
+  }
+}
+
+bintray {
+  user = 'bjornvester'
+  key = '35ead405ab5c4c228413b51f6fd6ce99ba134ea9'
+  pkg {
+    repo = 'maven'
+    name = 'ebean-gradle-plugin'
+    version {
+      name = '11.27.1-bjornvester-1.0.3'
+    }
+  }
+  publications = ['MyPublication']
+}
+
+publishing {
+  publications {
+    MyPublication(MavenPublication) {
+      from components.java
+      groupId 'io.ebean'
+      artifactId 'ebean-gradle-plugin'
+      pom {
+        name = 'ebean-gradle-plugin'
+        packaging = 'jar'
+        description = 'Gradle plugin for enhancement Ebean entity beans'
+        url = 'http://github.com/bjornvester/ebean-gradle-plugin'
+
+        /*
+        scm {
+          url 'scm:git@github.com/ebean-orm-tools/ebean-gradle-plugin.git'
+          connection 'scm:git@github.com/ebean-orm-tools/ebean-gradle-plugin.git'
+          developerConnection 'scm:git:https://github.com/ebean-orm-tools/ebean-gradle-plugin.git'
+        }
+*/
+        licenses {
+          license {
+            name = 'The Apache Software License, Version 2.0'
+            url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+            //distribution 'repo'
+          }
+        }
+/*
+        developers {
+          developer {
+            id 'rbygrave'
+            name 'Robin Bygrave'
+          }
+          developer {
+            id 'vnnv'
+            name 'Victor Nikiforov'
+          }
+        }*/
+      }
+    }
+  }
 }
 
 task javadocJar(type: Jar, dependsOn: javadoc) {
@@ -70,6 +153,28 @@ pluginBundle {
   }
 }
 
+task createPomBmv {
+  doLast {
+    pom {
+      project {
+        groupId 'org.example'
+        artifactId 'test'
+        version '1.0.0'
+
+        inceptionYear '2008'
+        licenses {
+          license {
+            name 'The Apache Software License, Version 2.0'
+            url 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+            distribution 'repo'
+          }
+        }
+      }
+    }.writeTo("pom.xml")
+  }
+}
+
+/*
 uploadArchives {
   repositories {
     mavenDeployer {
@@ -113,3 +218,4 @@ uploadArchives {
     }
   }
 }
+*/

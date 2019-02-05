@@ -1,242 +1,274 @@
 package io.ebean.gradle
 
+import groovy.transform.CompileDynamic
+import groovy.transform.CompileStatic
+import org.gradle.api.Action
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
-import org.gradle.api.UnknownTaskException
-import org.gradle.api.file.FileCollection
+import org.gradle.api.artifacts.dsl.DependencyHandler
 import org.gradle.api.logging.Logger
 import org.gradle.api.logging.Logging
-import org.gradle.api.plugins.JavaPluginConvention
+import org.gradle.api.plugins.JavaPlugin
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.SourceSet
 import org.gradle.api.tasks.SourceSetContainer
-import org.gradle.api.tasks.TaskContainer
-import org.gradle.api.tasks.TaskOutputs
 import org.gradle.api.tasks.compile.AbstractCompile
-import org.gradle.api.tasks.compile.GroovyCompile
 import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.util.GradleVersion
 
+import static org.gradle.api.tasks.PathSensitivity.NONE
+
+@CompileStatic
 class EnhancePlugin implements Plugin<Project> {
-
   private final Logger logger = Logging.getLogger(EnhancePlugin.class)
 
-  private static def supportedCompilerTasks = [
-    'processResources',
-    'compileJava',
-    'compileKotlin',
-    'compileGroovy',
-    'compileScala',
-    'compileKotlinAfterJava',
-    'copyMainKotlinClasses',
-    'classes',
-    'testClasses',
-    'compileTestJava',
-    'compileTestKotlin',
-    'compileTestGroovy',
-    'compileTestScala']
-
-  /**
-   * Output directories containing classes we want to run enhancement on.
-   */
-  private def outputDirs = new HashMap<Project, Set<File>>()
-
-  /**
-   * Test output directories containing classes we want to run enhancement on.
-   */
-  private def testOutputDirs = new HashMap<Project, Set<File>>()
-
+  // TODO: Test that the project can be imported in IntelliJ if cleaned before hand, and that the generated source directories appear when generating the queries.
+  // TODO: Consider moving the integration-test folder from src to the root
+  // TODO: Cleanup or ignore generated SQL files from the unit tests
+  // TODO: Make sure all examples in the following repository passes: https://github.com/ebean-orm-examples
+  // TODO: See the following for inspiration on APT processing in 5.2 as well as the provider API: https://github.com/tbroyer/gradle-apt-plugin/commit/6e375fe2fa4d6498cf71a82530588ca15c95ab7f
+  // TODO: Document the workaround for the following issue (which is do separate Java sources in a Kotlin project used as MappedSuper classes into its own project): https://github.com/ebean-orm-tools/ebean-gradle-plugin/issues/18
+  // TODO: Verify that we use the new Task API: https://docs.gradle.org/4.9/userguide/task_configuration_avoidance.html#sec:old_vs_new_configuration_api_overview
+  // TODO: See https://github.com/gradle-guides/gradle-site-plugin/blob/master/src/main/kotlin/org/gradle/plugins/site/SitePlugin.kt for best practices
+  // TODO: Extension should probably use the properties/provider API
+  // TODO: Should the logger be grabbed from the project instead (e.g. project.logger.debug(...))?
+  // TODO: Test API generated folders in Eclipse
+  // TODO: There should be an extension property for Kotlin query generation. This is speed up the build if there are no Java entity beans.
+  // TODO: Will the Java query generator pick up Kotlin entity classes as they are (I think) on the classpath? And what happens if this is the case?
+  // TODO: Verify that the query source generator has the output directory as a Gradle output for up-to-date checking
+  // TODO: Document how to enable Kotlin query beans (e.g. you have to manually apply kapt dependencies)
+  // TODO: If we introduce the "kotlin query beans flag" in the extension, test that the kapt dependencies have been added manually (or do it automatically in a listener/setter method in the configuration phase - if so, do we need to do it differently if the Kotlin plugin has not been applied yet?).
   void apply(Project project) {
-    def params = project.extensions.create("ebean", EnhancePluginExtension)
+    if (GradleVersion.current() < GradleVersion.version("4.9")) {
+      throw new GradleException("The Ebean Gradle plugin is only supported in Gradle version 4.9 and higher")
+    }
 
-    // delay the registration of the various compile task.doLast hooks
-    project.afterEvaluate({
+    EnhancePluginExtension extension = project.extensions.create("ebean", EnhancePluginExtension, project)
+    //Boolean hasKotlingPluginBeforeEbean = project.plugins.hasPlugin("org.jetbrains.kotlin.jvm")
 
-      EnhancePluginExtension extension = project.extensions.findByType(EnhancePluginExtension)
-      logger.info("EnhancePlugin apply")
+
+    // TODO: REMOVE
+    project.plugins.withId("org.jetbrains.kotlin.jvm", { plugin ->
+    } as Action<? super Plugin>)
+
+    // TODO: NOT LAZY IT SEEMS - see: https://github.com/hibernate/hibernate-orm/blob/master/tooling/hibernate-gradle-plugin/src/main/groovy/org/hibernate/orm/tooling/gradle/HibernatePlugin.java
+
+    project.afterEvaluate { // This is to ensure the extension properties have been evaluated (if present)
+      //Boolean hasKotlingPluginAfterEvaluate = project.plugins.hasPlugin("org.jetbrains.kotlin.jvm")
+
+      File configurationFile = extension.configurationFile
+
+      if (configurationFile.name != "ebean.mf") {
+        throw new GradleException("The name of the configuration file must be ebean.mf")
+      }
+
+      if (extension.queryBeans && extension.configureIdeaModulesForQuerybeanGeneration) {
+        supportAptSourcesInIdea(project)
+      }
+
+      //if (hasKotlingPluginAfterEvaluate) {
+      /*
+      TaskProvider<Task> compileKotlinTask = project.tasks.named("compileKotlin")
+      TaskProvider<JavaCompile> compileJavaTask = project.tasks.named("compileJava", JavaCompile)
+      compileJavaTask.configure {
+        it.dependsOn.remove(compileKotlinTask.get())
+        println "BMV1: " + compileJavaTask.get().properties.get("compileKotlinOutputClasses")
+        it.doFirst {
+          println "BMV2: " + compileJavaTask.get().properties.get("compileKotlinOutputClasses")
+        }
+        //it.dependsOn.removeAll { Task task -> task.name == "compileKotlin"}
+      }
+      compileKotlinTask.configure {
+        it.dependsOn(compileJavaTask)
+        it.doFirst {
+          println "BMV3"
+        }
+      }
+      */
+      //}
+
+      project.tasks.withType(AbstractCompile).configureEach({ AbstractCompile compileTask ->
+        // The following avoids the unwanted tasks kaptGenerateStubsKotlin and kaptGenerateStubsTestKotlin
+        if (compileTask.name.startsWith("compile")) {
+
+          // Input is optional as the configuration file might not exist
+          // It is also not path sensitive as it is a configuration file (if we don't declare this, the task output will not be relocatable in the cache)
+          compileTask.inputs.files(configurationFile).optional().withPathSensitivity(NONE)
+          //compileTask.inputs.property("greeting", extension.greeting) // TODO: All of the props here. Also test for this.
+
+          // Add the destination directory for the Java compiler if not already present (used in joint compilation with other languages)
+          //if (compileTask.name == "compileJava" && hasKotlingPluginAfterEvaluate) {
+          //TaskProvider<Task> compileKotlinTask = project.tasks.named("compileKotlin")
+          //compileTask.dependsOn.remove(compileKotlinTask)
+          //}
+          //if (compileTask.name == "compileKotlin") {
+          /*
+          TaskProvider<Task> compileJavaTask = project.tasks.named("compileJava", { JavaCompile cj ->
+            //cj.taskDependencies.values - "compileKotlin"
+            //cj.dependsOn.remove(compileTask)
+          } as Action<? super Task>)
+          */
+          //TaskProvider<Task> compileJavaTask = project.tasks.named("compileJava")
+          //compileJavaTask.taskDependencies.values - "compileJava"
+          //compileTask.inputs.files(compileJavaTask.get().outputs)
+          //compileTask.dependsOn(compileJavaTask)
+          //}
+
+
+          compileTask.doLast {
+            Set<File> extraClassPath = compileTask.classpath.files + compileTask.destinationDir + configurationFile.parentFile
+
+            /*
+            if (!(compileTask instanceof JavaCompile)) {
+              javaCompileTasks.each { javaCompileTask ->
+                if (javaCompileTask.destinationDir != compileTask.destinationDir) {
+                  extraClassPath += javaCompileTask.destinationDir
+                }
+              }
+            }
+            */
+
+            URL[] extraClasspathAsUrlArray = extraClassPath*.toURI()*.toURL() as URL[]
+
+            // TODO: Temporary only (hopefully)
+            // Workaround for https://github.com/ebean-orm/ebean-agent/issues/93
+            extraClasspathAsUrlArray.find { it.path.endsWith("jar") }?.openConnection()?.with { con ->
+              con.setDefaultUseCaches(false)
+            }
+
+            ClassLoader cxtLoader = Thread.currentThread().getContextClassLoader()
+            logger.debug("Performing enhancement for task $compileTask.name on folder $compileTask.destinationDir")
+            new EbeanEnhancer(compileTask.destinationDir.toPath(), extraClasspathAsUrlArray, cxtLoader, extension).withCloseable {
+              it.enhance()
+            }
+          }
+        }
+      } as Action<AbstractCompile>)
+
+      project.plugins.withType(JavaPlugin) {
+        // TODO: Find out if we want this or not
+        //project.dependencies.add('implementation', "io.ebean:ebean-querybean:$extension.ebeanVersion")
+      }
 
       if (extension.queryBeans) {
-        hookQueryBeans(project, extension)
-      }
+        //if (hasKotlingPluginBeforeEbean) {
+        //throw new GradleException("The EBean plugin must be applied before the Kotlin plugin if you like to generate Query classes")
+        //}
 
-      def tasks = project.tasks
-      // processResources task must be run before compileJava so ebean.mf to be in place. Same is valid for tests
-      tasks.findByName("compileJava").mustRunAfter(tasks.findByName("processResources"))
-      tasks.findByName("compileTestJava").mustRunAfter(tasks.findByName("processTestResources"))
-      supportedCompilerTasks.each { compileTask ->
-        tryHookCompilerTask(tasks, compileTask, project, params)
-      }
+        project.plugins.withType(JavaPlugin) {
+          // TODO: Test if this works for version >= 5.2 (e.g. snapshot of master branch if still unreleased). See https://github.com/gradle/gradle/pull/7551/files for some of the details.
+          if (GradleVersion.current() < GradleVersion.version("5.2")) {
+            // Workaround for https://github.com/gradle/gradle/issues/4956
+            SourceSetContainer sourceSets = (SourceSetContainer) project.getProperties().get("sourceSets")
+            sourceSets.configureEach({ SourceSet sourceSet ->
+              if (sourceSet.compileJavaTaskName) {
+                project.tasks.named(sourceSet.compileJavaTaskName).configure({ JavaCompile task ->
+                  task.options.annotationProcessorGeneratedSourcesDirectory = project.file("$project.buildDir/generated/sources/annotationProcessor/java/${sourceSet.name}")
+                } as Action)
+              }
+            } as Action<SourceSet>)
+          }
 
-      def testTask = project.tasks.getByName('test')
-      testTask.doFirst {
-        logger.debug("enhancement prior to running tests")
-        enhanceDirectory(project, extension, "$project.buildDir/classes/main/")
-        enhanceDirectory(project, extension, "$project.buildDir/kotlin-classes/main/")
-        enhanceDirectory(project, extension, "$project.buildDir/classes/test/")
-      }
-    })
-  }
+          DependencyHandler dependencies = project.dependencies
 
-  /**
-   * Hook up APT querybean generation.
-   */
-  private void hookQueryBeans(Project project, EnhancePluginExtension params) {
-    logger.info("add querybean-generator")
+          // For the "main" source set
+          dependencies.add('annotationProcessor', "io.ebean:querybean-generator:$extension.generatorVersion")
+          dependencies.add('annotationProcessor', "io.ebean:persistence-api:2.2.1")
+          dependencies.add('annotationProcessor', "io.ebean:ebean-annotation:4.3")
+          dependencies.add('implementation', "io.ebean:ebean-querybean:$extension.querybeanVersion")
 
-    def deps = project.dependencies
-    if (params.kotlin) {
-      // add needed dependencies for apt processing
-      deps.add('kapt', "io.ebean:kotlin-querybean-generator:$params.generatorVersion")
-      deps.add('kapt', "io.ebean:ebean-querybean:11.24.1")
-      deps.add('kapt', "io.ebean:persistence-api:2.2.1")
-
-    } else {
-      // add needed dependencies for apt processing
-      deps.add('apt', "io.ebean:querybean-generator:$params.generatorVersion")
-      deps.add('apt', "io.ebean:ebean-querybean:11.24.1")
-      deps.add('apt', "io.ebean:persistence-api:2.2.1")
-    }
-
-    String genDir = "$project.projectDir/generated"
-
-    if (params.kotlin) {
-
-    } else {
-      Closure cl = { AbstractCompile task ->
-        if (!(task.name in ['compileJava', 'compileGroovy'])) {
-          return
-        }
-
-        task.options.annotationProcessorPath = project.configurations.apt
-        task.options.compilerArgs << "-s"
-        task.options.compilerArgs << genDir
-
-        task.doFirst {
-          new File(project.projectDir, '/generated').mkdirs()
+          // For the "test" source set
+          dependencies.add('testAnnotationProcessor', "io.ebean:querybean-generator:$extension.generatorVersion")
+          dependencies.add('testAnnotationProcessor', "io.ebean:persistence-api:2.2.1")
+          dependencies.add('testAnnotationProcessor', "io.ebean:ebean-annotation:4.3")
+          dependencies.add('testImplementation', "io.ebean:ebean-querybean:$extension.querybeanVersion")
         }
       }
+    }
+  }
 
-      [JavaCompile, GroovyCompile].each { Class type ->
-        project.tasks.withType(type, cl)
+  /**
+   * Workaround for https://youtrack.jetbrains.com/issue/IDEA-187868.
+   */
+  @CompileDynamic
+  private void supportAptSourcesInIdea(Project project) {
+    project.plugins.withType(JavaPlugin) {
+      if (project.plugins.hasPlugin("scala")) {
+        // For what-ever reason, there are problems with the Scala and Idea plugins in combination in a sub-project
+        // Applying the Idea plugin to the root project seems to work around the problem
+        project.rootProject.plugins.apply("idea")
       }
-
-      SourceSetContainer sourceSets = (SourceSetContainer)project.getProperties().get("sourceSets")
-      createSourceSet(project, "generated", genDir, sourceSets.main.runtimeClasspath)
-    }
-
-  }
-
-  /**
-   * Create sourceSet for generated source directory.
-   */
-  SourceSet createSourceSet(Project project, String name, String outputDir, Object cp) {
-
-    JavaPluginConvention javaConvention = project.convention.getPlugin(JavaPluginConvention)
-    SourceSetContainer sourceSets = javaConvention.sourceSets
-    sourceSets.create(name) {
-      output.dir(outputDir)
-      runtimeClasspath = cp
-    }
-  }
-
-  private void tryHookCompilerTask(TaskContainer tasks, String taskName, Project project, EnhancePluginExtension params) {
-    try {
-      def task = tasks.getByName(taskName)
-
-      task.doLast({ completedTask ->
-        recordTaskOutputs(completedTask.outputs, project, taskName)
-        enhanceTaskOutputs(project, params, taskName)
-      })
-    } catch (UnknownTaskException e) {
-      logger.debug("Ignore as compiler task is not activated " + e.message)
-    }
-  }
-
-  /**
-   * Record and collect the output directories for use with enhancement later.
-   */
-  private void recordTaskOutputs(TaskOutputs taskOutputs, Project project, String taskName) {
-
-    Set<File> projectOutputDirs
-    if (taskName.toLowerCase(Locale.US).contains("test")) {
-      projectOutputDirs = testOutputDirs.computeIfAbsent(project, { new HashSet<File>() })
-    } else {
-      projectOutputDirs = outputDirs.computeIfAbsent(project, { new HashSet<File>() })
-    }
-    taskOutputs.files.each { taskOutputDir ->
-      if (taskOutputDir.isDirectory()) {
-        projectOutputDirs.add(taskOutputDir)
-      } else {
-        logger.error("$taskOutputDir is not a directory")
+      project.plugins.apply("idea")
+      project.afterEvaluate {
+        project.idea.module {
+          def mainGeneratedSources = project.tasks["compileJava"].options.annotationProcessorGeneratedSourcesDirectory
+          if (mainGeneratedSources) {
+            sourceDirs += mainGeneratedSources
+            generatedSourceDirs += mainGeneratedSources
+          }
+          def testGeneratedSources = project.tasks["compileTestJava"].options.annotationProcessorGeneratedSourcesDirectory
+          if (testGeneratedSources) {
+            testSourceDirs += testGeneratedSources
+            generatedSourceDirs += testGeneratedSources
+          }
+        }
       }
     }
-  }
-
-  /**
-   * Perform the enhancement for the classes and testClasses tasks only (otherwise skip).
-   */
-  private void enhanceTaskOutputs(Project project, EnhancePluginExtension params, String taskName) {
-
-    Set<File> projectOutputDirs
-    switch (taskName) {
-      case "classes":
-        projectOutputDirs = outputDirs.computeIfAbsent(project, { new HashSet<File>() })
-        break
-      case "testClasses":
-        projectOutputDirs = testOutputDirs.computeIfAbsent(project, { new HashSet<File>() })
-        break
-      default:
-        return
-    }
-
-    logger.debug("perform enhancement for task: $taskName")
-    List<URL> urls = createClassPath(project)
-    def cxtLoader = Thread.currentThread().getContextClassLoader()
-
-    projectOutputDirs.each { urls.add(it.toURI().toURL()) }
-    projectOutputDirs.each { outputDir ->
-      // also add outputDir to the classpath
-      def output = outputDir.toPath()
-      urls.add(output.toUri().toURL())
-      def urlsArray = urls.toArray(new URL[urls.size()])
-      new EbeanEnhancer(output, urlsArray, cxtLoader, params).enhance()
-    }
-  }
-
-  private void enhanceDirectory(Project project, EnhancePluginExtension params, String outputDir) {
-
-    File outDir = new File(outputDir)
-    if (!outDir.exists()) {
-      return
-    }
-
-    List<URL> urls = createClassPath(project)
-
-    def cxtLoader = Thread.currentThread().getContextClassLoader()
-    def path = outDir.toPath()
-
-    def urlsArray = urls.toArray(new URL[urls.size()])
-    new EbeanEnhancer(path, urlsArray, cxtLoader, params).enhance()
-  }
-
-
-  private List<URL> createClassPath(Project project) {
-
-    Set<File> compCP = project.configurations.getByName("compileClasspath").resolve()
-    List<URL> urls = compCP.collect { it.toURI().toURL() }
-
-    FileCollection outDirs = project.sourceSets.main.output.classesDirs
-    outDirs.each { outputDir ->
-      addToClassPath(urls, outputDir)
-      addToClassPath(urls, outputDir)
-    }
-
-    File kotlinMain = new File(project.buildDir, "kotlin-classes/main")
-    if (kotlinMain.exists() && kotlinMain.isDirectory()) {
-      urls.add(kotlinMain.toURI().toURL())
-    }
-    return urls
-  }
-
-  static void addToClassPath(List<URL> urls, File file) {
-    urls.add(file.toURI().toURL())
   }
 }
+
+// ------ TEMP STUFF
+/*
+    Task compileJavaTask = project.tasks.named("compileJava")
+    compileJavaTask.inputs.file(configurationFile)
+    compileJavaTask.doLast {
+      ClassLoader cxtLoader = Thread.currentThread().getContextClassLoader()
+      SourceSetContainer sourceSets = (SourceSetContainer) project.getProperties().get("sourceSets");
+      SourceSet mainSourceSet = sourceSets.getByName("main")
+      File mainOutputDir = mainSourceSet.java.outputDir
+      logger.debug("perform enhancement for task: $compileJavaTask.name")
+      new EbeanEnhancer(mainOutputDir.toPath(), extraClasspathAsUrlArray, cxtLoader, extension).enhance()
+    }
+
+    Task compileTestJavaTask = project.tasks.named("compileTestJava")
+    compileTestJavaTask.doLast {
+      ClassLoader cxtLoader = Thread.currentThread().getContextClassLoader()
+      SourceSetContainer sourceSets = (SourceSetContainer) project.getProperties().get("sourceSets");
+      SourceSet testSourceSet = sourceSets.getByName("test")
+      File testOutputDir = testSourceSet.java.outputDir
+      logger.debug("perform enhancement for task: $compileTestJavaTask.name")
+      new EbeanEnhancer(testOutputDir.toPath(), extraClasspathAsUrlArray, cxtLoader, extension).enhance()
+    }
+
+
+
+          // TODO: Nedenstående er måske nødvendig i forhold til inputs/outputs samt IntelliJ
+        ((JavaCompile) compileJavaTask).configure {
+            String relativePath = "build/generated/src/main/java"
+            sourceSets.main.java { srcDir relativePath }
+            File generatedSourceDir = project.file("build/generated/src/main/java")
+            println "Creating and configuring generated source directory \$generatedSourceDir"
+            project.mkdir(generatedSourceDir)
+            options.annotationProcessorGeneratedSourcesDirectory = generatedSourceDir
+            outputs.dir(generatedSourceDir)
+        }
+
+// See https://kotlinlang.org/docs/reference/kapt.html
+//     https://kotlinlang.org/docs/reference/using-gradle.html
+project.plugins.withId("org.jetbrains.kotlin.jvm") {
+  project.pluginManager.apply('org.jetbrains.kotlin.kapt') // kotlin-kapt
+  DependencyHandler dependencies = project.dependencies
+  dependencies.add('kapt', "io.ebean:kotlin-querybean-generator:$extension.generatorVersion")
+  dependencies.add('kapt', "io.ebean:persistence-api:2.2.1")
+  dependencies.add('kapt', "io.ebean:ebean-annotation:4.3")
+  dependencies.add('implementation', "io.ebean:ebean-querybean:$extension.querybeanVersion")
+
+}
+idea {
+  module {
+    sourceDirs += files('build/generated/source/kapt/main', 'build/generated/source/kaptKotlin/main')
+    generatedSourceDirs += files('build/generated/source/kapt/main', 'build/generated/source/kaptKotlin/main')
+  }
+
+*/

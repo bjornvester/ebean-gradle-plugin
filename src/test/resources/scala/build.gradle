@@ -1,0 +1,18 @@
+plugins {
+  id 'scala'
+  id 'io.ebean'
+}
+
+repositories {
+  jcenter()
+}
+
+dependencies {
+  implementation 'org.scala-lang:scala-library:2.12.7'
+  implementation group: 'io.ebean', name: 'ebean', version: '11.26.1'
+}
+
+ebean {
+  debugLevel = 9 // 1 - 9
+  queryBeans = true
+}

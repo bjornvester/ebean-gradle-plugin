@@ -1,0 +1,18 @@
+plugins {
+  id 'groovy'
+  id 'io.ebean'
+}
+
+repositories {
+  jcenter()
+}
+
+dependencies {
+  implementation localGroovy()
+  implementation group: 'io.ebean', name: 'ebean', version: '11.26.1'
+}
+
+ebean {
+  debugLevel = 9
+  queryBeans = true
+}

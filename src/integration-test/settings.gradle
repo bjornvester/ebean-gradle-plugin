@@ -1,0 +1,5 @@
+rootProject.name = "integration-test"
+
+includeBuild "$rootDir/../../" // This is the plugin project itself (the root)
+
+include "test-java", "test-groovy", "test-scala", "test-kotlin"
